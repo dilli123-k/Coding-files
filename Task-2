@@ -1,0 +1,68 @@
+import requests
+import sqlite3
+
+def fetch_jokes():
+    url = "https://sv443.net/jokeapi/v2/joke/Any?lang=en&amount=100"
+    response = requests.get(url)
+    jokes = response.json()['jokes']
+    return jokes
+
+def store_jokes_in_db(jokes, db_name='jokes.db'):
+    conn = sqlite3.connect(db_name)
+    cursor = conn.cursor()
+    
+    # Create jokes table
+    cursor.execute('''CREATE TABLE IF NOT EXISTS jokes (id INTEGER PRIMARY KEY,category TEXT,type TEXT,joke TEXT,setup TEXT,delivery TEXT,nsfw INTEGER,political INTEGER,
+                    sexist INTEGER,safe INTEGER,lang TEXT)''')
+
+    # Insert jokes into the table
+    for joke in jokes:
+        category = joke['category']
+        type_ = joke['type']
+        nsfw = joke['flags']['nsfw']
+        political = joke['flags']['political']
+        sexist = joke['flags']['sexist']
+        safe = joke['safe']
+        lang = joke['lang']
+        
+        if type_ == 'single':
+            joke_text = joke['joke']
+            setup, delivery = None, None
+        else:
+            joke_text = None
+            setup = joke['setup']
+            delivery = joke['delivery']
+        
+        cursor.execute('''
+            INSERT INTO jokes (category, type, joke, setup, delivery, nsfw, political, sexist, safe, lang)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (category, type_, joke_text, setup, delivery, nsfw, political, sexist, safe, lang))
+    
+    conn.commit()
+    conn.close()
+
+# Fetch jokes and store in DB
+jokes = fetch_jokes()
+store_jokes_in_db(jokes)
+
+# fast APi for the api endpoint
+from fastapi import FastAPI
+import sqlite3
+
+app = FastAPI()
+
+def get_jokes_from_db():
+    conn = sqlite3.connect('jokes.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM jokes LIMIT 10')
+    jokes = cursor.fetchall()
+    conn.close()
+    return jokes
+
+@app.get("/jokes")
+def get_jokes():
+    jokes = get_jokes_from_db()
+    return {"jokes": jokes}
+
+# to running the  Fast api server
+uvicorn main:app --reload
