@@ -1,4 +1,4 @@
-# Data extraction:
+# Data extraction
 import pandas as pd
 
 def extract_data(file_path, password):
