@@ -1,142 +1,100 @@
-# Coding-filesfrom dataclasses import dataclass
-from typing import Optional
-from datetime import date
+# Data extraction:
+import pandas as pd
 
-@dataclass
-class EmployeeRecord:
-    employee_id: int
-    name: str
-    email: str
-    department: str
-    designation: str
-    salary: float
-    date_of_joining: date
+def extract_data(file_path, password):
+    # Use pandas to read the CSV file and handle password protection
+    # Assuming the files are accessible directly via URL
+    data = pd.read_csv(file_path, password=password)
+    return data
+
+data_region_a = extract_data("https://sharepoint.com/order_region_a.csv", "order_region_a")
+data_region_b = extract_data("https://sharepoint.com/order_region_b.csv", "order_region_b")
+
+# Transform Data
+def transform_data(data_a, data_b):
+     
+    data_a['region'] = 'A'
+    data_b['region'] = 'B'
+    
+    # Concatenate data from both regions
+    data = pd.concat([data_a, data_b])
+    
+    # Calculate total_sales
+    data['total_sales'] = data['QuantityOrdered'] * data['ItemPrice']
+    data['net_sale'] = data['total_sales'] - data['PromotionDiscount']
+    
+     
+    data = data[data['net_sale'] > 0]
+    
+    # Remove duplicates based on OrderId
+    data = data.drop_duplicates(subset='OrderId')
+    
+    return data
+
+transformed_data = transform_data(data_region_a, data_region_b)
+
+# Load data
+import sqlite3
+
+def load_data_to_db(data, db_name='sales_data.db'):
+    conn = sqlite3.connect(db_name)
+    cursor = conn.cursor()
+    
+    # Create sales_data table
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sales_data (OrderId INTEGER PRIMARY KEY, OrderItemId INTEGER,
+            QuantityOrdered INTEGER,
+            ItemPrice REAL,
+            PromotionDiscount REAL,
+            total_sales REAL,
+            region TEXT,
+            net_sale REAL
+        )
+    ''')
+
+    # Insert data into the sales_data table
+    for index, row in data.iterrows():
+        cursor.execute('''
+            INSERT INTO sales_data (OrderId, OrderItemId, QuantityOrdered, ItemPrice, 
+            PromotionDiscount, total_sales, region, net_sale)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (row['OrderId'], row['OrderItemId'], row['QuantityOrdered'], row['ItemPrice'], 
+              row['PromotionDiscount'], row['total_sales'], row['region'], row['net_sale']))
+    
+    conn.commit()
+    conn.close()
+
+load_data_to_db(transformed_data)
+
+# SQL quaries and validation
+def validate_data(db_name='sales_data.db'):
+    conn = sqlite3.connect(db_name)
+    cursor = conn.cursor()
+
+    # 1. Count the total number of records
+    cursor.execute('SELECT COUNT(*) FROM sales_data')
+    total_records = cursor.fetchone()[0]
+    print(f"Total records: {total_records}")
+
+    # 2. Find total sales amount by region
+    cursor.execute('SELECT region, SUM(total_sales) FROM sales_data GROUP BY region')
+    region_sales = cursor.fetchall()
+    for region, total_sales in region_sales:
+        print(f"Total sales in {region}: {total_sales}")
+
+    # 3. Find the average sales amount per transaction
+    cursor.execute('SELECT AVG(net_sale) FROM sales_data')
+    avg_sales = cursor.fetchone()[0]
+    print(f"Average sales per transaction: {avg_sales}")
+
+    # 4. Ensure no duplicate OrderId values
+    cursor.execute('SELECT OrderId, COUNT(*) FROM sales_data GROUP BY OrderId HAVING COUNT(*) > 1')
+    duplicates = cursor.fetchall()
+    if duplicates:
+        print(f"Duplicate OrderIds: {duplicates}")
+    else:
+        print("No duplicate OrderIds found.")
+
+    conn.close()
 
 
-import asyncio
-import aiohttp
-import csv
-from typing import List
-from datetime import datetime
-from dataclasses import dataclass
-
-# Define EmployeeRecord data class
-@dataclass
-class EmployeeRecord:
-    employee_id: int
-    name: str
-    email: str
-    department: str
-    designation: str
-    salary: float
-    date_of_joining: datetime
-
-# Function to parse CSV and create EmployeeRecord instances
-def parse_csv(file_path: str) -> List[EmployeeRecord]:
-    records = []
-    with open(file_path, 'r') as file:
-        reader = csv.DictReader(file)
-        for row in reader:
-            records.append(EmployeeRecord(
-                employee_id=int(row['employee_id']),
-                name=row['name'],
-                email=row['email'],
-                department=row['department'],
-                designation=row['designation'],
-                salary=float(row['salary']),
-                date_of_joining=datetime.strptime(row['date_of_joining'], "%Y-%m-%d")
-            ))
-    return records
-
-# Asynchronous function to send data to the server
-async def send_record(session: aiohttp.ClientSession, url: str, record: EmployeeRecord):
-    async with session.post(url, json=record.__dict__) as response:
-        return await response.text()
-
-# Main function to process CSV and send records
-async def main(csv_file_path: str, server_url: str):
-    records = parse_csv(csv_file_path)
-    async with aiohttp.ClientSession() as session:
-        tasks = [send_record(session, server_url, record) for record in records]
-        results = await asyncio.gather(*tasks)
-        print(f"Processed {len(results)} records")
-
-# Run the client
-if __name__ == "__main__":
-    asyncio.run(main('employee_records.csv', 'http://localhost:5000/submit'))
-
-from flask import Flask, request, jsonify
-from dataclasses import dataclass
-from datetime import datetime
-import logging
-from typing import Optional
-import pymysql
-from functools import wraps
-
-# Initialize Flask app
-app = Flask(__name__)
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-
-# MySQL connection settings
-DB_HOST = "localhost"
-DB_USER = "user"
-DB_PASS = "password"
-DB_NAME = "employee_db"
-
-# Employee Record Data Class
-@dataclass
-class EmployeeRecord:
-    employee_id: int
-    name: str
-    email: str
-    department: str
-    designation: str
-    salary: float
-    date_of_joining: datetime
-
-# Function decorator for logging and validating incoming records
-def log_request(func):
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        logging.info("Request received")
-        result = func(*args, **kwargs)
-        logging.info("Request processed")
-        return result
-    return wrapper
-
-def validate_record(record):
-    if not all([record.get('employee_id'), record.get('name'), record.get('email')]):
-        raise ValueError("Missing required fields")
-
-# Insert record into MySQL database
-def insert_record_to_db(record: EmployeeRecord):
-    connection = pymysql.connect(host=DB_HOST, user=DB_USER, password=DB_PASS, db=DB_NAME)
-    with connection.cursor() as cursor:
-        cursor.execute("""
-            INSERT INTO employee (employee_id, name, email, department, designation, salary, date_of_joining)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (record.employee_id, record.name, record.email, record.department, record.designation, record.salary, record.date_of_joining))
-    connection.commit()
-    connection.close()
-
-# Define POST endpoint for receiving employee records
-@app.route('/submit', methods=['POST'])
-@log_request
-def submit_employee():
-    try:
-        data = request.get_json()
-        employee = EmployeeRecord(**data)
-        validate_record(data)
-        insert_record_to_db(employee)
-        return jsonify({"status": "success", "message": "Employee record stored"}), 200
-    except ValueError as ve:
-        logging.error(f"Validation error: {ve}")
-        return jsonify({"status": "error", "message": str(ve)}), 400
-    except Exception as e:
-        logging.error(f"Error: {e}")
-        return jsonify({"status": "error", "message": "An error occurred"}), 500
-
-if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=5000)
+validate_data()
